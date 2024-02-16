@@ -6,7 +6,7 @@ const joi = require("joi");
 
 app.use(express.json());
 
-const url = DB_URL;
+const url = process.env.DB_URL;
 const client = new MongoClient(url);
 const dbName = "Cluster0";
 let db;
