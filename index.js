@@ -6,8 +6,7 @@ const joi = require("joi");
 
 app.use(express.json());
 
-const url =
-  "mongodb+srv://edit:AOcrGglElhZZ4zyF@cluster0.rfxegoj.mongodb.net/?retryWrites=true&w=majority";
+const url = DB_URL;
 const client = new MongoClient(url);
 const dbName = "Cluster0";
 let db;
@@ -75,7 +74,6 @@ app.get("/subredits/:subredditName/posts", async (req, res) => {
   }
 });
 
-const { ObjectId } = require("mongodb");
 const Joi = require("joi");
 
 const updatePostSchema = Joi.object({
@@ -83,32 +81,38 @@ const updatePostSchema = Joi.object({
   content: Joi.string().optional(),
 });
 
-app.put("/subredits/:name/posts/:id", async (req, res) => {
+app.put("/subredits/:subredditName/posts/:postId", async (req, res) => {
   const subredditName = req.params.subredditName;
   const postId = req.params.postId;
 
+  // Convert the string ID to an ObjectId for querying
   const objectId = new ObjectId(postId);
 
+  // Validate the request body against the schema
   const { value, error } = updatePostSchema.validate(req.body);
   if (error) {
     return res.status(400).json({ error: error.details });
   }
 
+  // Construct the update document
   const updateDocument = {
     $set: value,
   };
 
+  // Perform the update operation
   try {
     const result = await db
       .collection("postsCollection")
       .updateOne({ _id: objectId, subreddit: subredditName }, updateDocument);
 
+    // Check if the update was successful
     if (result.matchedCount > 0) {
       res.status(200).json({ message: "Post updated successfully." });
     } else {
       res.status(404).json({ message: "Post not found." });
     }
   } catch (err) {
+    // Handle any errors that occurred during the update
     console.error("Error updating post:", err);
     res
       .status(500)
