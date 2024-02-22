@@ -1,166 +1,99 @@
 require("dotenv").config();
 const express = require("express");
-const { MongoClient, ObjectId } = require("mongodb");
+const bcrypt = require("bcrypt");
 const Joi = require("joi");
+const mongoDB = require("./db");
+const middleware = require("./middleware");
+const subredits = require("./subredits.handlers");
 
-let db;
-const dbClient = new MongoClient(process.env.DB_URL);
-const subreditsCollection = "subredits";
-const postsCollection = "posts";
+const usersCollection = "users";
 
 const app = express();
 app.use(express.json());
 
-const newSubredit = Joi.object({
-  name: Joi.string().min(5).max(20),
-  description: Joi.string().max(100),
-}).unknown();
+app.post("/login", async (req, res) => {
+  const db = await mongoDB.getDb();
+  const user = await db.collection(usersCollection).findOne({
+    username: req.body.username,
+  });
+  if (!user) {
+    return res.status(401).json({ result: "unauthorized" });
+  }
 
-function findSubreditById(id) {
-  return db.collection(subreditsCollection).findOne({ _id: id });
-}
+  if (!user.verified) {
+    return res.status(401).json({ result: "unauthorized" });
+  }
 
-function findPostById(id) {
-  return db.collection(postsCollection).findOne({ _id: id });
-}
+  const validPassword = await bcrypt.compare(req.body.password, user.password);
+  if (!validPassword) {
+    return res.status(401).json({ result: "unauthorized" });
+  }
 
-app.post("/subredits", async (req, res) => {
-  const { error, value } = newSubredit.validate(req.body);
+  const payload = {
+    userId: user._id,
+  };
+  const options = {
+    expiresIn: "1h",
+  };
+
+  const token = jwt.sign(payload, process.env.JWT_SECRET, options);
+
+  res.status(200).json({ result: "ok", token });
+});
+
+const signupSchema = Joi.object({
+  name: Joi.string().min(3),
+  email: Joi.string().email(),
+  password: Joi.string().alphanum().min(8),
+  username: Joi.string().min(3).max(24),
+});
+
+app.post("/signup", async (req, res) => {
+  const { error, value } = signupSchema.validate(req.body);
   if (error) {
     return res.status(400).json(error.details);
   }
 
-  const insertRes = await db.collection(subreditsCollection).insertOne(value);
+  // TODO
+  // check user exists
+  //    se existe - retorna erro
+  //
+  // generate verification code
 
-  const result = await findSubreditById(insertRes.insertedId);
+  // insert user { name, email, username, passwordHash, code, verified(false) }
+  //
+  //
+  // send verification email (code)
+  //          assumption: user goes on app, submits code
 
-  res.status(201).json(result);
+  res.status(200).json({});
 });
 
-const newPost = Joi.object({
-  title: Joi.string().min(3),
-  content: Joi.string().min(10),
-});
-
-app.post("/subredits/:id/posts", async (req, res) => {
-  const { error, value } = newPost.validate(req.body);
-  if (error) {
-    return res.status(400).json(error.details);
-  }
-
-  const subredit = await findSubreditById(new ObjectId(req.params.id));
-  if (!subredit) {
-    return res.status(404).json({
-      error: "subredit not found",
-    });
-  }
-
-  const insertRes = await db.collection(postsCollection).insertOne({
-    title: value.title, //req.body.title
-    content: value.content,
-    subreditId: subredit._id,
+app.post("/verification", async (req, res) => {
+  const user = await db.collection("users").findOne({
+    code: req.body.code,
+    verified: false,
   });
-
-  const insertedPost = await db
-    .collection(postsCollection)
-    .findOne({ _id: insertRes.insertedId });
-
-  res.status(201).json({
-    _id: insertRes.insertedId,
-    title: insertedPost.title,
-  });
-});
-
-app.get("/subredits/:id/posts", async (req, res) => {
-  const posts = await db
-    .collection(postsCollection)
-    .find({ subreditId: new ObjectId(req.params.id) })
-    .toArray();
-
-  res.status(200).json(posts);
-});
-
-const newComment = Joi.Schema({
-  content: Joi.string().min(5),
-});
-
-app.post("/subredits/:id/posts/:pid/comments", async (req, res) => {
-  const { error, value } = newComment.validate(req.body);
-  if (error) {
-    return res.status(400).json(error.details);
+  if (!user) {
+    return res.status(400).json({ result: "invalid code" });
   }
 
-  const post = await db.collection(postsCollection).findOne({
-    _id: new ObjectId(req.params.pid),
-    subreditId: new ObjectId(req.params.id),
-  });
-  if (!post) {
-    return res.status(404).json({
-      error: "post not found",
-    });
-  }
-
-  await db.collection(postsCollection).updateOne(
+  await db.collection("users").updateOne(
     {
-      _id: new ObjectId(req.params.pid),
-    },
-    {
-      $push: {
-        comments: value.content,
-      },
-    }
-  );
-
-  const updatedPost = await findPostById(post._id);
-
-  res.status(200).json(updatedPost);
-});
-
-const postUpdate = Joi.object({
-  content: Joi.string().min(10),
-});
-
-app.put("/subredits/:id/posts/:pid", async (req, res) => {
-  const { error, value } = postUpdate.validate(req.body);
-  if (error) {
-    return res.status(400).json(error.details);
-  }
-
-  const post = await db.collection(postsCollection).findOne({
-    _id: new ObjectId(req.params.pid),
-    subreditId: new ObjectId(req.params.id),
-  });
-  if (!post) {
-    return res.status(404).json({
-      error: "post not found",
-    });
-  }
-
-  await db.collection(postsCollection).updateOne(
-    {
-      _id: new ObjectId(req.params.pid),
+      _id: user._id,
     },
     {
       $set: {
-        content: value.content,
+        verified: true,
       },
     }
   );
 
-  const updatedPost = await findPostById(post._id);
-
-  res.status(200).json(updatedPost);
+  res.status(204);
 });
 
-async function start() {
-  const conn = await dbClient.connect();
-  db = conn.db(process.env.DB_NAME);
+app.use(middleware.auth, subredits);
 
-  app.listen(3000, () => {
-    console.log("ok");
-  });
-}
-
-start()
-  .then(() => console.log("server is running"))
-  .catch((err) => console.log(err));
+app.listen(3000, () => {
+  console.log("server is running...");
+});
