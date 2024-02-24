@@ -2,6 +2,8 @@ require("dotenv").config();
 const express = require("express");
 const bcrypt = require("bcrypt");
 const Joi = require("joi");
+const jwt = require("jsonwebtoken");
+const uuid = require("uuid");
 const mongoDB = require("./db");
 const middleware = require("./middleware");
 const subredits = require("./subredits.handlers");
@@ -48,21 +50,38 @@ const signupSchema = Joi.object({
   username: Joi.string().min(3).max(24),
 });
 
+// captcha
 app.post("/signup", async (req, res) => {
+  const db = await mongoDB.getDb();
+
   const { error, value } = signupSchema.validate(req.body);
   if (error) {
     return res.status(400).json(error.details);
   }
 
-  // TODO
   // check user exists
-  //    se existe - retorna erro
-  //
-  // generate verification code
+  const user = await db.collection("users").findOne({
+    username: req.body.username,
+  });
+  if (user) {
+    return res.status(400).json({ result: "username already exists" });
+  }
 
+  // generate verification code
+  const verificationCode = uuid.v4();
+
+  // hash password
+  const passwordHash = await bcrypt.hash(req.body.password, 10);
+
+  const newUser = {
+    ...req.body,
+    verificationCode,
+  };
+  newUser.password = passwordHash;
+
+  await db.collection(usersCollection).insertOne(newUser);
   // insert user { name, email, username, passwordHash, code, verified(false) }
-  //
-  //
+
   // send verification email (code)
   //          assumption: user goes on app, submits code
 
@@ -90,6 +109,76 @@ app.post("/verification", async (req, res) => {
   );
 
   res.status(204);
+});
+
+const recoverSchema = Joi.object({
+  username: Joi.string().min(3).max(24),
+});
+
+// recover password
+app.put("/recover", async (req, res) => {
+  const db = await mongoDB.getDb();
+
+  const { error, value } = recoverSchema.validate(req.body);
+  if (error) {
+    return res.status(400).json(error.details);
+  }
+
+  const user = await db.collection("users").findOne({
+    username: req.body.username,
+  });
+  if (!user) {
+    return res.status(204).end();
+  }
+
+  const recoveryCode = uuid.v4();
+  await db.collection("users").updateOne(
+    {
+      _id: user._id,
+    },
+    {
+      $set: {
+        recoveryCode,
+      },
+    }
+  );
+
+  // send email (user.email, recoveryCode)
+
+  res.status(204).end();
+});
+
+const passwordSchema = Joi.object({
+  password: Joi.string().alphanum().min(8).required(),
+  code: Joi.string().uuid().required(),
+});
+
+app.put("/password", async (req, res) => {
+  const db = await mongoDB.getDb();
+
+  const { error, value } = passwordSchema.validate(req.body);
+  if (error) {
+    return res.status(400).json(error.details);
+  }
+
+  const passwordHash = await bcrypt.hash(value.password, 10);
+
+  const updResult = await db.collection("users").updateOne(
+    {
+      recoveryCode: value.code,
+    },
+    {
+      $set: {
+        password: passwordHash,
+        recoveryCode: null,
+      },
+    }
+  );
+  if (!updResult.matchedCount) {
+    return res.status(400).json({ error: "invalid code" });
+  }
+
+  res.status(204).end();
 });
 
 app.use(middleware.auth, subredits);

@@ -35,3 +35,11 @@ TODO:
       title
       content
       }
+
+- upvotes/likes
+  endpoint para adicionar um like a um post
+
+- listar posts de um subredit ordenados por likes
+  (extra: query param para controlar a ordem)
+
+- endpoint que retorna media de likes dos posts num subredit
